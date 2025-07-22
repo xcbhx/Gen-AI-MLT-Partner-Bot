@@ -33,22 +33,24 @@ class SecEdgar:
   returns the full company info as a tuple.
   """
   def name_to_cik(self, name):
-    cik = self.company_name.get(name.lower())
-    if cik:
+    try: 
+      cik = self.company_name[name.lower()]
       return self.cik_data[cik]
-    return "Company not found."
+    except KeyError:
+      return 'Company not found.'
 
   """
   Retrieves the full company info by searching with the company's
   stock ticker symbol.
   """
   def ticker_to_cik(self, ticker):
-    cik = self.stock_ticker.get(ticker.lower())
-    if cik:
+    try:
+      cik = self.stock_ticker[ticker.lower()]
       return self.cik_data[cik]
-    return "Ticker not found."
+    except KeyError:
+      return 'Ticker not found.'
   
 
 url_se = SecEdgar('https://www.sec.gov/files/company_tickers.json')
-print(url_se.name_to_cik("Apple Inc."))
-print(url_se.ticker_to_cik(""))
+print(url_se.name_to_cik('Apple Inc.'))
+print(url_se.ticker_to_cik(''))
