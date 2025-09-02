@@ -1,21 +1,22 @@
 import requests
+from markdownify import markdownify as md
 
-"""
-SEC (Securities and Exchange Commission) EDGAR class retrieves and parses company 
-data from a public JSON file. 
-It follows the SEC Fair Access Policy and builds lookup dictionaries to search for a 
-company's CIK using either its name or stock ticker. 
-The class filters out incomplete entries and provides easy access to company data.
-"""
 class SecEdgar:
   def __init__(self, fileurl):
+    """
+    SEC (Securities and Exchange Commission) EDGAR class retrieves and parses company 
+    data from a public JSON file. 
+    It follows the SEC Fair Access Policy and builds lookup dictionaries to search for a 
+    company's CIK using either its name or stock ticker. 
+    """
     self.fileurl = fileurl
     self.company_name = {}
     self.stock_ticker = {}
     self.cik_data = {}
-    
-    headers = {'user-agent': 'MLT CE ceina.ellison@gmail.com'}
-    r = requests.get(self.fileurl, headers=headers)
+    self.headers = {'user-agent': 'MLT CE ceina.ellison@gmail.com'}
+
+    r = requests.get(self.fileurl, headers=self.headers, timeout=15)
+    r.raise_for_status()
     self.filejson = r.json()
 
     for item in self.filejson.values():
@@ -28,55 +29,50 @@ class SecEdgar:
       self.company_name[name.lower()] = cik
       self.stock_ticker[ticker.lower()] = cik
 
-  """
-  Looks up a company's Central Index Key (CIK) using it's name and
-  returns the full company info as a tuple.
-  """
   def name_to_cik(self, name):
+    """
+    Looks up a company's Central Index Key (CIK) using it's name and returns the full company info as a tuple.
+    """
     try: 
       cik = self.company_name[name.lower()]
       return self.cik_data[cik]
     except KeyError:
       return 'Company not found.'
 
-  """
-  Retrieves the full company info by searching with the company's
-  stock ticker symbol.
-  """
   def ticker_to_cik(self, ticker):
+    """
+    Retrieves the full company info by searching with the company's stock ticker symbol.
+    """
     try:
       cik = self.stock_ticker[ticker.lower()]
       return self.cik_data[cik]
     except KeyError:
       return 'Ticker not found.'
 
-  """
-  CIKs must be 10 digits (padded with zeros on the left).
-  """ 
   def _format_cik(self, cik):
+    """
+    CIKs must be 10 digits (padded with zeros on the left).
+    """ 
     return str(cik).zfill(10)
 
-  """
-  Fetches recent SEC filings for the given CIK from the EDGAR submissions API.
-  Returns the 'recent' filings section as a dictionary, which includes arrays of
-  accession numbers, primary documents, and descriptions.
-  """
   def _get_filings(self, cik):
-    headers = {'user-agent': 'MLT CE ceina.ellison@gmail.com'}
+    """
+    Fetches recent SEC filings for the given CIK from the EDGAR submissions API.
+    """
     formatted_cik = self._format_cik(cik)
     url = f'https://data.sec.gov/submissions/CIK{formatted_cik}.json'
 
     try:
-      r = requests.get(url, headers=headers)
+      r = requests.get(url, headers=self.headers, timeout=15)
       r.raise_for_status()
       return r.json()['filings']['recent']
-    except:
-      raise RuntimeError(f'Failed to fetch filings for CIK {cik}.')
+    except requests.RequestException as e:
+      raise RuntimeError(f'Failed to fetch filings for CIK {cik}: {e}')
 
-  """
-  Fetches all the 10-K reports from selected CIK for given year.
-  """
   def annual_filing(self, cik, year):
+    """
+    Fetches all the 10-K reports from selected CIK for given year.
+    """
     try:
       filings = self._get_filings(cik)
     except RuntimeError as e:
@@ -84,29 +80,26 @@ class SecEdgar:
     
     accession_numbers = filings['accessionNumber']
     primary_docs = filings['primaryDocument']
-    descriptions = filings['primaryDocDescription']
+    forms = filings['form']
     filing_date = filings['filingDate']
 
-    results = []
     for i in range(len(accession_numbers)):
-      if descriptions[i] == '10-K' and filing_date[i].startswith(str(year)):
+      if forms[i] and forms[i].startswith('10-K') and filing_date[i].startswith(str(year)):
         accession_num = accession_numbers[i].replace('-', '')
-        formatted_cik = self._format_cik(cik)
-        url = f'https://www.sec.gov/Archives/edgar/data/{formatted_cik}/{accession_num}/{primary_docs[i]}'
+        clean_cik = str(cik).lstrip('0') or '0' # Avoid empty if cik is '000000000'
+        url = f'https://www.sec.gov/Archives/edgar/data/{clean_cik}/{accession_num}/{primary_docs[i]}'
+        try:
+          response = requests.get(url, headers=self.headers, timeout=15)
+          response.raise_for_status()
+          return md(response.text)  # Converts HTML into Markdown
+        except requests.RequestException as e:
+          return f'Failed to fetch filing content: {e}'
+    return 'No 10-K filing found for the specified year.'
 
-        results.append({
-          'Filing Date': filing_date[i],
-          'Accession Number': accession_numbers[i],
-          'Primary Document': primary_docs[i],
-          'Description': descriptions[i],
-          'Document URL': url
-        })
-    return results if results else 'No 10-K filing found for the specified year.'
-
-  """
-  Fecthes all the 10-Q reports from selected CIK for a given year + quarter.
-  """
   def quarterly_filing(self, cik, year, quarter):
+    """
+    Fecthes all the 10-Q reports from selected CIK for a given year + quarter.
+    """
     quarter_months = {
       1: [12, 1, 2],
       2: [3, 4, 5],
@@ -124,47 +117,40 @@ class SecEdgar:
     
     accession_numbers = filings['accessionNumber']
     primary_docs = filings['primaryDocument']
-    descriptions = filings['primaryDocDescription']
     filing_dates = filings['filingDate'] # <-- List of all filing dates
+    forms = filings['form']
 
-    results = []
     for i in range(len(accession_numbers)):
-      description = descriptions[i]
       filing_date = filing_dates[i]
 
-      if description == '10-Q' and filing_date.startswith(str(year)):
+      if forms[i] and forms[i].startswith('10-Q') and filing_date.startswith(str(year)):
         filing_month = int(filing_date.split('-')[1])
         if filing_month in quarter_months[quarter]:
           accession_num = accession_numbers[i].replace('-', '')
-          formatted_cik = self._format_cik(cik)
-          url = f'https://www.sec.gov/Archives/edgar/data/{formatted_cik}/{accession_num}/{primary_docs[i]}'
-
-          results.append({
-            'Filing Date': filing_date,
-            'Accession Number': accession_numbers[i],
-            'Primary Document': primary_docs[i],
-            'Description': description,
-            'Document URL': url
-          })
-    return results if results else 'No 10-Q filing found for the specified year and quarter.'
+          clean_cik = str(cik).lstrip('0') or '0'
+          url = f'https://www.sec.gov/Archives/edgar/data/{clean_cik}/{accession_num}/{primary_docs[i]}'
+          try:
+            response = requests.get(url, headers=self.headers, timeout=15)
+            response.raise_for_status()
+            return md(response.text)  # Converts HTML into Markdown
+          except requests.RequestException as e:
+            return f'Failed to fetch filing content: {e}'
+    return 'No 10-Q filing found for the specified year and quarter.'
+          
+        
 
 
 url_se = SecEdgar('https://www.sec.gov/files/company_tickers.json')
-filing_year = 2024
 company_info = url_se.name_to_cik('Apple Inc.')
 if isinstance(company_info, tuple):
   cik, ticker, name = company_info
   print('\n--- Company Information ---')
-  print(f'Company Name: {name}')
-  print(f'Stock Ticker: {ticker}')
-  print(f'CIK: {url_se._format_cik(cik)}')
+  print(f'Company Name: {name} (Stock Ticker:{ticker})\n')
 
-  print(f'\n--- {filing_year} 10-K Filing Summary ---') 
-  filing_summary = url_se.annual_filing(cik, filing_year)
-  print(filing_summary)
+  print(f'\n---2024 10-K Filing Summary ---') 
+  print(url_se.annual_filing(cik, 2024))
+
+  print('\n--- 2024 Q2 10-Q Filing(s) ---')
+  print(url_se.quarterly_filing(cik, 2024, 2))
 else:
   print(company_info)
-
-quarterly = url_se.quarterly_filing(cik, 2024, 2)
-print('\n--- 2024 Q2 10-Q Filing(s) ---')
-print(quarterly)
